@@ -1,0 +1,36 @@
+# ======================================================================
+# AI Assist Google - 통합 Python 패키지 목록
+# ======================================================================
+# 이 파일은 Streamlit 프론트엔드와 FastAPI 백엔드 실행에 필요한
+# 모든 라이브러리를 포함하고 있습니다.
+#
+# 설치 방법:
+# pip install -r requirements.txt
+# ======================================================================
+
+# --- FastAPI 및 서버 관련 ---
+fastapi
+uvicorn[standard]
+
+# --- Streamlit 프론트엔드 관련 ---
+streamlit
+requests
+
+# --- LangChain 및 AI Agent 관련 ---
+langchain
+langgraph
+langchain-community
+langchain-google-genai
+
+# --- Google API 연동 관련 ---
+google-api-python-client
+google-auth-httplib2
+google-auth-oauthlib
+
+# --- RAG 및 Vector DB 관련 ---
+faiss-cpu
+tiktoken # LangChain의 일부 TextSplitter에서 사용
+
+# --- 환경 변수 및 설정 관련 ---
+python-dotenv
+pydantic-settings
