@@ -10,19 +10,15 @@ from server.core.config import settings
 llm = ChatGoogleGenerativeAI(
     model=settings.GEMINI_MODEL_NAME,
     google_api_key=settings.GOOGLE_API_KEY,
-    temperature=0.7,
-    convert_system_message_to_human=True # Gemini는 system message를 user message로 변환해야 함
+    temperature=0.7
 )
 
 # --- 1. 일반 대화 에이전트 ---
 def create_general_agent():
-    """
-    특별한 도구 없이 대화하는 기본 에이전트.
-    """
     prompt = ChatPromptTemplate.from_messages([
         ("system", "당신은 친절하고 유능한 AI 비서입니다. 사용자의 질문에 명확하고 간결하게 답변하세요."),
-        MessagesPlaceholder(variable_name="history"),
-        ("user", "{messages}"),
+        MessagesPlaceholder(variable_name="history", optional=True),
+        ("user", "{input}"),
     ])
     chain = prompt | llm
     return chain
@@ -34,31 +30,37 @@ def create_react_agent(tools, system_prompt):
     """
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
-        MessagesPlaceholder(variable_name="history"),
-        ("user", "{messages}"),
+        MessagesPlaceholder(variable_name="history", optional=True),
+        ("user", "{input}"),
         MessagesPlaceholder(variable_name="agent_scratchpad"),
     ])
     agent = create_tool_calling_agent(llm, tools, prompt)
-    executor = AgentExecutor(agent=agent, tools=tools, verbose=True)
+    executor = AgentExecutor(agent=agent, tools=tools, verbose=True, handle_parsing_errors=True)
     return executor
 
-# --- 3. 전문가 에이전트 생성 ---
+# --- 3. 전문가 에이전트 생성 (프롬프트 수정됨) ---
 def create_gmail_agent(tools):
-    """Gmail 관련 작업을 처리하는 에이전트"""
-    system_prompt = "당신은 Gmail 전문가입니다. 사용자의 요청에 따라 메일을 검색하고, 요약하고, 관련 정보를 제공하세요."
+    # --- FIX: 도구 사용을 강력하게 지시하는 프롬프트로 변경 ---
+    system_prompt = """
+    당신은 Gmail API와 직접 연결된 AI 에이전트입니다.
+    당신의 유일한 임무는 사용자의 질문에 답하기 위해 'search_gmail' 도구를 사용하는 것입니다.
+    절대 추측하거나 일반적인 지식으로 답변해서는 안 됩니다. "메일을 확인할 수 없다" 또는 "권한이 없다"와 같은 답변을 해서는 안됩니다.
+    사용자가 메일에 대해 질문하면, 당신은 반드시 'search_gmail' 도구를 호출하여 그 결과를 바탕으로 답변해야 합니다. 이것이 당신의 유일한 기능입니다.
+    """
     return create_react_agent(tools, system_prompt)
 
 def create_calendar_agent(tools):
-    """Google Calendar 관련 작업을 처리하는 에이전트"""
-    system_prompt = "당신은 Google Calendar 전문가입니다. 사용자의 요청에 따라 일정을 조회하고, 요약하여 알려주세요."
+    # --- FIX: 도구 사용을 강력하게 지시하는 프롬프트로 변경 ---
+    system_prompt = """
+    당신은 Google Calendar API와 직접 연결된 AI 에이전트입니다.
+    당신의 유일한 임무는 사용자의 질문에 답하기 위해 'get_today_calendar_events' 도구를 사용하는 것입니다.
+    절대 추측하거나 일반적인 지식으로 답변해서는 안 됩니다. "일정을 확인할 수 없다" 또는 "권한이 없다"와 같은 답변을 해서는 안됩니다.
+    사용자가 일정에 대해 질문하면, 당신은 반드시 'get_today_calendar_events' 도구를 호출하여 그 결과를 바탕으로 답변해야 합니다. 이것이 당신의 유일한 기능입니다.
+    """
     return create_react_agent(tools, system_prompt)
 
 # --- 4. RAG 에이전트 (Retriever-Augmented Generation) ---
 def create_rag_agent(retriever):
-    """
-    내부 문서를 검색하여 답변을 생성하는 RAG 에이전트.
-    이 에이전트는 ReAct가 아닌 Retrieval Chain을 사용합니다.
-    """
     system_prompt = (
         "당신은 문서 검색 및 요약 전문가입니다."
         "주어진 문서(context)를 기반으로 사용자의 질문에 답변하세요."
@@ -68,21 +70,18 @@ def create_rag_agent(retriever):
     )
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_prompt),
-        MessagesPlaceholder(variable_name="history"),
-        ("user", "{input}"), # Retrieval Chain은 'input'을 키로 사용
+        MessagesPlaceholder(variable_name="history", optional=True),
+        ("user", "{input}"),
     ])
     
-    # 문서를 프롬프트에 채워넣는 체인
     question_answer_chain = create_stuff_documents_chain(llm, prompt)
-    
-    # 리트리버와 답변 생성 체인을 결합
     rag_chain = create_retrieval_chain(retriever, question_answer_chain)
     
-    # LangGraph와 호환되도록 입력/출력 형식을 맞춤
-    # 'messages'에서 사용자 입력을 추출하여 'input'으로 전달
     def invoke_rag_chain(state):
-        last_user_message = state['messages'][-1].content
-        history = state.get('history', [])
-        return rag_chain.invoke({"input": last_user_message, "history": history})['answer']
+        result = rag_chain.invoke({
+            "input": state["input"], 
+            "history": state.get("history", [])
+        })
+        return result.get('answer', "죄송합니다, 답변을 생성할 수 없습니다.")
 
     return invoke_rag_chain

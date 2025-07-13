@@ -1,100 +1,84 @@
 # server/agents/master_agent.py
-from langchain_core.messages import BaseMessage
 from langgraph.graph import StateGraph, END
-from typing import TypedDict, Annotated, List
-import operator
-
-from .specialist_agents import (
-    create_gmail_agent,
-    create_calendar_agent,
-    create_rag_agent,
-    create_general_agent
-)
+from langchain_core.messages import AIMessage
 from .state import AgentState
 from ..tools.google_services import get_google_services_tools
-from ..rag.retriever import get_rag_retriever
+from .chains import get_gmail_chain, get_calendar_chain, get_general_chain
+# RAG 기능은 아직 사용하지 않으므로 주석 처리 (필요시 활성화)
+# from ..rag.retriever import get_rag_retriever
 
-# --- 1. 에이전트 및 도구 준비 ---
-# 각 전문 에이전트와 도구를 생성합니다.
-gmail_tools = get_google_services_tools(['gmail'])
-calendar_tools = get_google_services_tools(['calendar'])
-rag_retriever = get_rag_retriever()
+# --- 1. 도구 및 체인 준비 ---
+tools = get_google_services_tools(['gmail', 'calendar'])
+gmail_tool = next((t for t in tools if t.name == 'search_gmail'), None)
+calendar_tool = next((t for t in tools if t.name == 'get_today_calendar_events'), None)
 
-gmail_agent = create_gmail_agent(gmail_tools)
-calendar_agent = create_calendar_agent(calendar_tools)
-rag_agent = create_rag_agent(rag_retriever)
-general_agent = create_general_agent()
+# 각 작업에 맞는 체인(Chain)을 생성합니다.
+gmail_chain = get_gmail_chain(gmail_tool)
+calendar_chain = get_calendar_chain(calendar_tool)
+general_chain = get_general_chain()
+# rag_chain = ... # 필요시 RAG 체인도 여기에 정의
 
 # --- 2. LangGraph 노드 정의 ---
+def chain_node(state: AgentState, chain):
+    """
+    주어진 체인을 실행하고, 그 결과를 AIMessage로 변환하여 상태를 업데이트합니다.
+    """
+    user_input = state['messages'][-1].content
+    history = state['messages'][:-1]
+    
+    # 체인 실행
+    result = chain.invoke({
+        "input": user_input,
+        "history": history
+    })
+    
+    return {"messages": [AIMessage(content=result)]}
 
-def general_agent_node(state: AgentState):
-    """일반 대화 노드"""
-    result = general_agent.invoke(state)
-    return {"messages": [result]}
+def general_node(state: AgentState):
+    return chain_node(state, general_chain)
 
-def gmail_agent_node(state: AgentState):
-    """Gmail 관련 작업 처리 노드"""
-    result = gmail_agent.invoke(state)
-    return {"messages": [result]}
+def gmail_node(state: AgentState):
+    return chain_node(state, gmail_chain)
 
-def calendar_agent_node(state: AgentState):
-    """Google Calendar 관련 작업 처리 노드"""
-    result = calendar_agent.invoke(state)
-    return {"messages": [result]}
-
-def rag_agent_node(state: AgentState):
-    """RAG 기반 질의응답 처리 노드"""
-    result = rag_agent.invoke(state)
-    return {"messages": [result]}
+def calendar_node(state: AgentState):
+    return chain_node(state, calendar_chain)
 
 # --- 3. 라우팅 로직 정의 ---
-
 def route_message(state: AgentState):
-    """사용자 메시지의 의도를 파악하여 적절한 전문가 에이전트로 라우팅"""
+    """사용자 메시지의 의도를 파악하여 적절한 체인으로 라우팅합니다."""
     last_message = state['messages'][-1]
     message_content = last_message.content.lower()
 
     if "메일" in message_content or "gmail" in message_content:
-        return "gmail_agent"
+        print("Routing to: gmail_node")
+        return "gmail_node"
     elif "일정" in message_content or "캘린더" in message_content or "calendar" in message_content:
-        return "calendar_agent"
-    # '보고서', '문서' 등 RAG가 필요한 키워드를 추가할 수 있습니다.
-    elif "보고서 요약" in message_content or "알려줘" in message_content:
-        # 이 부분은 더 정교한 LLM 기반 라우팅으로 개선할 수 있습니다.
-        return "rag_agent"
+        print("Routing to: calendar_node")
+        return "calendar_node"
     else:
-        return "general_agent"
+        print("Routing to: general_node")
+        return "general_node"
 
 # --- 4. 그래프(Graph) 구성 ---
-
 def get_agent_executor():
     """LangGraph 워크플로우를 생성하고 컴파일하여 실행기를 반환합니다."""
     workflow = StateGraph(AgentState)
 
-    # 노드 추가
-    workflow.add_node("general_agent", general_agent_node)
-    workflow.add_node("gmail_agent", gmail_agent_node)
-    workflow.add_node("calendar_agent", calendar_agent_node)
-    workflow.add_node("rag_agent", rag_agent_node)
+    workflow.add_node("general_node", general_node)
+    workflow.add_node("gmail_node", gmail_node)
+    workflow.add_node("calendar_node", calendar_node)
 
-    # 진입점(Entry Point)에서 라우팅 로직으로 연결
-    workflow.add_conditional_edges(
-        "__start__",
+    workflow.set_conditional_entry_point(
         route_message,
         {
-            "general_agent": "general_agent",
-            "gmail_agent": "gmail_agent",
-            "calendar_agent": "calendar_agent",
-            "rag_agent": "rag_agent",
+            "general_node": "general_node",
+            "gmail_node": "gmail_node",
+            "calendar_node": "calendar_node",
         },
     )
 
-    # 각 전문가 에이전트 노드 실행 후에는 종료(END)
-    workflow.add_edge("general_agent", END)
-    workflow.add_edge("gmail_agent", END)
-    workflow.add_edge("calendar_agent", END)
-    workflow.add_edge("rag_agent", END)
+    workflow.add_edge("general_node", END)
+    workflow.add_edge("gmail_node", END)
+    workflow.add_edge("calendar_node", END)
 
-    # 그래프 컴파일
     return workflow.compile()
-
