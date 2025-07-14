@@ -64,9 +64,23 @@ def get_calendar_chain(tool):
 
     요약 답변:
     """
-    # 캘린더 도구는 입력이 필요 없으므로, 입력을 무시하고 호출하도록 람다 함수 사용
-    calendar_tool_wrapper = lambda x: tool()
-    return create_tool_summarizer_chain(calendar_tool_wrapper, prompt_template)
+    prompt = ChatPromptTemplate.from_template(prompt_template)
+
+    # LCEL 체인을 구성합니다.
+    # 1. 입력을 무시하고 tool({})을 호출하여 'tool_output'을 생성합니다.
+    # 2. 원본 입력에서 'input' 키의 값을 가져옵니다.
+    # 3. 위 두 값을 프롬프트에 전달하여 LLM을 호출합니다.
+    # 4. LLM의 출력을 문자열로 파싱합니다.
+    chain = (
+        {
+            "tool_output": lambda x: tool({}),
+            "input": lambda x: x["input"],
+        }
+        | prompt
+        | llm
+        | StrOutputParser()
+    )
+    return chain
 
 def get_general_chain():
     """일반 대화 체인을 생성합니다."""

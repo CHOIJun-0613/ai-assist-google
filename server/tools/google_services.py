@@ -60,6 +60,13 @@ def search_gmail(query: str) -> str:
         creds = get_credentials(['gmail'])
         service = build('gmail', 'v1', credentials=creds)
         
+        # '오늘' 키워드가 포함된 경우, 날짜 검색 쿼리로 변환
+        if '오늘' in query:
+            from datetime import date, timedelta
+            today = date.today()
+            yesterday = today - timedelta(days=1)
+            query = f'after:{yesterday.strftime("%Y/%m/%d")} before:{today.strftime("%Y/%m/%d")}'
+
         results = service.users().messages().list(userId='me', q=query, maxResults=5).execute()
         messages = results.get('messages', [])
 
@@ -81,7 +88,7 @@ def search_gmail(query: str) -> str:
         return f"알 수 없는 오류 발생: {e}"
 
 @tool
-def get_today_calendar_events() -> str:
+def get_today_calendar_events(query: str = "") -> str:
     """
     "오늘의 Google Calendar 일정을 모두 가져와 요약해서 반환합니다."
     """
