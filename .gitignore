@@ -206,3 +206,6 @@ marimo/_static/
 marimo/_lsp/
 __marimo__/
 \"credentials.json\" 
+
+# Google API credentials
+credentials.json
